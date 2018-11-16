@@ -69,21 +69,47 @@ class MetaDefenderService(Service):
         if obj.filedata.grid_id == None:
             raise ServiceConfigError("Missing filedata.")
 
+     # Fetch Scan Result by File Hash via MetaDefender Core
+    def hashScanResult(self, file_hash, url, headers):
+        api_url = url + "/metascan_rest/hash/" + file_hash
+        response = requests.get(api_url, headers=headers)
+        data = response.json()
+        report = [False, data]
+        if file_hash not in data.keys():
+            report[0] = True
+        return report
 
-def run(self, obj, config): 
-        #API object for metadefender API
+    # Scan a File via MetaDefender Core
+    def uploadFile(self, file_name, url, headers):
+        api_url = url + "/metascan_rest/file"
+        files = file_name
+        response = requests.post(api_url, data=files, headers=headers)
+       
+        data = response.json()
+        return data["data_id"]
+
+    # Fetch Scan Result (by Data ID) via MetaDefender Core
+    def retrieveScanResult(self, file_data_id, url, headers):
+        api_url = url + "/metascan_rest/file/" + file_data_id
+        response = requests.get(api_url, headers=headers)
+        data = response.json()
+        # Ensure that we have the full scan report, especially useful for scanning large files
+        while data['scan_results']['progress_percentage'] < 100:
+            response = requests.get(api_url, headers=headers)
+            data = json.loads(response.text)
+            time.sleep(1)
+        return data
+
+    def run(self, obj, config): 
         api = API(config['api_key'])
-        #Store the url from the config.
-        url = config['set_url']
-
-        # Utility object for gettig sha1 of the file that is going to be sent or results returned for.
-        util = Util()
+        url = config['url']
+        headers = {"apikey" : api_key}
 
         data = obj.filedata.read()
         zipdata = create_zip([("samples", data)])
-        url = config.get('url', '')
+        
         # SHA1 hash of the given file
-        file_hash = util.calculateFileHash(obj)
+        file_hash = obj.sha1
 
         if config.get('use_proxy'):
             self._debug("MetaDefender: proxy handler set to: %s" % settings.HTTP_PROXY)
@@ -92,15 +118,12 @@ def run(self, obj, config):
         else:
             self._debug("MetaDefender: proxy handler unset")
 
-        
-        # SHA1 hash of the given file
-        file_hash = util.calculateFileHash(obj)
 
         # was this file scanned/uploaded already?
-        hash_found = api.hashScanResult(file_hash, url)[0]
+        hash_found = api.hashScanResult(file_hash, url, headers)[0]
 
         # if so we can obtain the scan result via the file's hash
-        file_scan_result = api.hashScanResult(file_hash, url)[1]
+        file_scan_result = api.hashScanResult(file_hash, url, headers)[1]
 
         if not hash_found:
 
@@ -108,7 +131,7 @@ def run(self, obj, config):
             file_data_id = api.uploadFile(data, url)
 
             # obtain the scan results via the file's data_id
-            file_scan_result = api.retrieveScanResult(file_data_id, url)
+            file_scan_result = api.retrieveScanResult(file_data_id, url, headers)
 
         
         for engine in file_scan_result["scan_results"]["scan_details"]:
@@ -121,69 +144,3 @@ def run(self, obj, config):
             #add result to the table.
             self._add_result('av_result', str(r), {"engine":str(engine), "date":datetime.now().isoformat()})
 
-
-#Metadefender API class. Written by Metadefender
-class API:
-
-    def __init__(self,api_key):
-        # an API Key is required for using MD Cloud API's (not required for Core)
-        self.headers = {"apikey" : api_key}
-
-    # Fetch Scan Result by File Hash via MetaDefender Core
-    def hashScanResult(self, file_hash,url):
-        api_url = url + "metascan_rest/hash/" + file_hash
-        response = requests.get(api_url, verify=False)
-        data = response.json()
-        report = [False, data]
-        if file_hash not in data.keys():
-            report[0] = True
-        return report
-
-    # Scan a File via MetaDefender Core
-    def uploadFile(self, file_name,url):
-        api_url = url + "/metascan_rest/file"
-        files = file_name
-        response = requests.post(api_url, data=files, verify=False)
-       
-        data = response.json()
-        return data["data_id"]
-
-    # Download Sanitized File via MetaDefender Core
-    def retrieveSanitizedFile(self, file_data_id, url):
-        api_url = url + "/metascan_rest/file/converted/" + file_data_id
-        response = requests.get(api_url, verify=False)
-      
-        return response.content
-
-    # Fetch Scan Result (by Data ID) via MetaDefender Core
-    def retrieveScanResult(self, file_data_id, url):
-        api_url = url + "/metascan_rest/file/" + file_data_id
-        response = requests.get(api_url, verify=False)
-       
-        data = response.json()
-
-        # Ensure that we have the full scan report, especially useful for scanning large files
-        while data['scan_results']['progress_percentage'] < 100:
-            response = requests.get(api_url, verify=False)
-            data = json.loads(response.text)
-            time.sleep(1)
-        return data
-
-
-
-# a simple class used to provide common utility functions
-class Util:
-
-    def __init__(self):
-        self.message = "Used to provide utility functions!"
-
-    # Calculate the SHA1 hash of the given file
-    def calculateFileHash(self, file_name):
-        BUF_SIZE = 65536
-        sha1 = hashlib.sha1()
-        while True:
-            data = file_name.filedata.read(BUF_SIZE)
-            if not data:
-                break
-            sha1.update(data)
-        return "{0}".format(sha1.hexdigest())

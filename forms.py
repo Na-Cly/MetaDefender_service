@@ -22,3 +22,4 @@ class MetaDefenderConfigForm(forms.Form):
     def __init__(self, *args, **kwargs):
         kwargs.setdefault('label_suffix', ':')
         super(MetaDefenderConfigForm, self).__init__(*args, **kwargs)
+
